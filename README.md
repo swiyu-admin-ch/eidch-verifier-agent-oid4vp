@@ -45,14 +45,11 @@ flowchart TD
 ```
 # Deployment
 
-For the deployment of the component please
-consult [deployment section of the verifier-agent-management](https://github.com/swiyu-admin-ch/eidch-verifier-agent-management)
-because it is the main interaction point with the issuer managent/oid4vci bundle
+For the deployment of the component please consult [deployment section of the verifier-agent-management](https://github.com/swiyu-admin-ch/eidch-verifier-agent-management) because it is the main interaction point with the issuer managent/oid4vci bundle
 
 # Development
 
-> Please be aware that this section **focus on the development of the verifier oid4vp service**. For the deployment of the
-> component please consult [deployment section of the verifier-agent-management](https://github.com/swiyu-admin-ch/eidch-verifier-agent-management).
+> Please be aware that this section **focus on the development of the verifier oid4vp service**.
 
 ## Single service development
 Run the following commands to start the service. This will also spin up a local postgres database from
