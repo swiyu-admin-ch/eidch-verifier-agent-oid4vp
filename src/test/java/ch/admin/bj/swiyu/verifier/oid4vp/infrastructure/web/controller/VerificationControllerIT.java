@@ -6,9 +6,34 @@
 
 package ch.admin.bj.swiyu.verifier.oid4vp.infrastructure.web.controller;
 
-import ch.admin.bj.swiyu.verifier.oid4vp.api.VerificationErrorDto;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import static ch.admin.bj.swiyu.verifier.oid4vp.api.VerificationErrorDto.INVALID_CREDENTIAL;
+import static ch.admin.bj.swiyu.verifier.oid4vp.api.VerificationErrorDto.INVALID_REQUEST;
+import static ch.admin.bj.swiyu.verifier.oid4vp.api.VerificationErrorResponseCodeDto.VERIFICATION_PROCESS_CLOSED;
+import static ch.admin.bj.swiyu.verifier.oid4vp.test.fixtures.StatusListGenerator.createTokenStatusListTokenVerifiableCredential;
+import static ch.admin.bj.swiyu.verifier.oid4vp.test.mock.SDJWTCredentialMock.getMultiplePresentationSubmissionString;
+import static ch.admin.bj.swiyu.verifier.oid4vp.test.mock.SDJWTCredentialMock.getPresentationSubmissionString;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
+import static org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED_VALUE;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
 import ch.admin.bj.swiyu.verifier.oid4vp.api.submission.PresentationSubmissionDto;
 import ch.admin.bj.swiyu.verifier.oid4vp.common.config.ApplicationProperties;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.config.UrlRewriteProperties;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.config.VerificationProperties;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.exception.DidResolverException;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.management.ManagementEntityRepository;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.management.VerificationStatus;
@@ -34,31 +59,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
-
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-
-import static ch.admin.bj.swiyu.verifier.oid4vp.api.VerificationErrorDto.VERIFICATION_PROCESS_CLOSED;
-import static ch.admin.bj.swiyu.verifier.oid4vp.test.fixtures.StatusListGenerator.createTokenStatusListTokenVerifiableCredential;
-import static ch.admin.bj.swiyu.verifier.oid4vp.test.mock.SDJWTCredentialMock.getMultiplePresentationSubmissionString;
-import static ch.admin.bj.swiyu.verifier.oid4vp.test.mock.SDJWTCredentialMock.getPresentationSubmissionString;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.when;
-import static org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED_VALUE;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -67,7 +71,7 @@ class VerificationControllerIT {
 
     private static final UUID requestId = UUID.fromString("deadbeef-dead-dead-dead-deaddeafbeef");
     private static final String NONCE_SD_JWT_SQL = "P2vZ8DKAtTuCIU1M7daWLA65Gzoa76tL";
-    private static final String publicKey = "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"oqBwmYd3RAHs-sFe_U7UFTXbkWmPAaqKTHCvsV8tvxU\",\"y\":\"np4PjpDKNfEDk9qwzZPqjAawiZ8sokVOozHR-Kt89T4\"}";
+    private static final String PUBLIC_KEY = "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"oqBwmYd3RAHs-sFe_U7UFTXbkWmPAaqKTHCvsV8tvxU\",\"y\":\"np4PjpDKNfEDk9qwzZPqjAawiZ8sokVOozHR-Kt89T4\"}";
 
     @Autowired
     private MockMvc mock;
@@ -75,10 +79,15 @@ class VerificationControllerIT {
     private ManagementEntityRepository managementEntityRepository;
     @Autowired
     private ApplicationProperties applicationProperties;
-    @MockBean
+    @Autowired
+    private VerificationProperties verificationProperties;
+    @MockitoBean
     private DidResolverAdapter didResolverAdapter;
-    @MockBean
+    @MockitoBean
     private StatusListResolverAdapter mockedStatusListResolverAdapter;
+
+    private UrlRewriteProperties urlRewriteProperties;
+
 
     @Test
     @Sql(executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD, scripts = "/insert_sdjwt_mgmt_expired.sql")
@@ -93,12 +102,13 @@ class VerificationControllerIT {
         mockDidResolverResponse(emulator);
 
         // WHEN / THEN
-        mock.perform(post(String.format("/request-object/%s/response-data", requestId))
+        mock.perform(post(String.format("/api/v1/request-object/%s/response-data", requestId))
                         .contentType(APPLICATION_FORM_URLENCODED_VALUE)
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isGone())
-                .andExpect(jsonPath("error").value(VERIFICATION_PROCESS_CLOSED.toString()));
+                .andExpect(jsonPath("$.error").value(INVALID_REQUEST.toString()))
+                .andExpect(jsonPath("$.error_code").value(VERIFICATION_PROCESS_CLOSED.toString()));
 
         // new route
         mock.perform(post(String.format("/api/v1/request-object/%s/response-data", requestId))
@@ -106,7 +116,8 @@ class VerificationControllerIT {
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isGone())
-                .andExpect(jsonPath("error").value(VERIFICATION_PROCESS_CLOSED.toString()));
+                .andExpect(jsonPath("$.error").value(INVALID_REQUEST.toString()))
+                .andExpect(jsonPath("$.error_code").value(VERIFICATION_PROCESS_CLOSED.toString()));
     }
 
     @Test
@@ -127,7 +138,7 @@ class VerificationControllerIT {
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("errorDescription").value(containsString("Issuer not in list of accepted issuers")));
+                .andExpect(jsonPath("error_description").value(containsString("Issuer not in list of accepted issuers")));
     }
 
     @Test
@@ -160,7 +171,7 @@ class VerificationControllerIT {
                     var responseJwt = SignedJWT.parse(result.getResponse().getContentAsString());
                     assertThat(responseJwt.getHeader().getAlgorithm().getName()).isEqualTo("ES256");
                     assertThat(responseJwt.getHeader().getKeyID()).isEqualTo(applicationProperties.getSigningKeyVerificationMethod());
-                    assertThat(responseJwt.verify(new ECDSAVerifier(ECKey.parse(publicKey)))).isTrue();
+                    assertThat(responseJwt.verify(new ECDSAVerifier(ECKey.parse(PUBLIC_KEY)))).isTrue();
 
                     // checking claims
                     var claims = responseJwt.getJWTClaimsSet();
@@ -169,32 +180,32 @@ class VerificationControllerIT {
                     assertThat(claims.getStringClaim("response_type")).isEqualTo("vp_token");
                     assertThat(claims.getStringClaim("response_mode")).isEqualTo("direct_post");
                     assertThat(claims.getStringClaim("nonce")).isNotNull();
-                    assertThat(claims.getStringClaim("response_uri")).isEqualTo(String.format("%s/request-object/%s/response-data", applicationProperties.getExternalUrl(), requestId));
+                    assertThat(claims.getStringClaim("response_uri")).isEqualTo(String.format("%s/api/v1/request-object/%s/response-data", applicationProperties.getExternalUrl(), requestId));
 
                     var presentationDefinition = (LinkedTreeMap) claims.getClaim("presentation_definition");
                     assertThat(presentationDefinition.get("id")).isNotNull();
-                    assertThat(presentationDefinition.get("name")).isEqualTo("Presentation Definition Name");
-                    assertThat(presentationDefinition.get("purpose")).isEqualTo("Presentation Definition Purpose");
+                    assertEquals("Presentation Definition Name", presentationDefinition.get("name"));
+                    assertEquals("Presentation Definition Purpose", presentationDefinition.get("purpose"));
 
                     var inputDescriptors = (List<LinkedTreeMap>) presentationDefinition.get("input_descriptors");
-                    var inputDescriptor = inputDescriptors.get(0);
+                    var inputDescriptor = inputDescriptors.getFirst();
 
                     assertThat(inputDescriptor.get("id")).isNotNull();
-                    assertThat(inputDescriptor.get("name")).isEqualTo("Test Descriptor Name");
-                    assertThat(inputDescriptor.get("purpose")).isEqualTo("Input Descriptor Purpose");
+                    assertEquals("Test Descriptor Name", inputDescriptor.get("name"));
+                    assertEquals("Input Descriptor Purpose", inputDescriptor.get("purpose"));
 
-                    var format = (LinkedTreeMap) inputDescriptor.get("format");
-                    var ldpVp = (Map<String, List>) format.get("vc+sd-jwt");
-                    assertThat(ldpVp.get("sd-jwt_alg_values").get(0)).isEqualTo("ES256");
-                    assertThat(ldpVp.get("kb-jwt_alg_values").get(0)).isEqualTo("ES256");
+                    var format = (LinkedTreeMap<String, Object>) inputDescriptor.get("format");
+                    var vp = (Map<String, List>) format.get("vc+sd-jwt");
+                    assertEquals("ES256", vp.get("sd-jwt_alg_values").getFirst());
+                    assertEquals("ES256", vp.get("kb-jwt_alg_values").getFirst());
 
                     var constraints = (LinkedTreeMap<List, List<LinkedTreeMap<List, List>>>) inputDescriptor.get("constraints");
-                    assertThat(constraints.get("fields").get(0).get("path").get(0)).isEqualTo("$");
+                    assertThat(constraints.get("fields").getFirst().get("path").getFirst()).isEqualTo("$");
 
                     var clientMetadata = (LinkedTreeMap) claims.getClaim("client_metadata");
-                    assertThat(clientMetadata.get("client_name")).isEqualTo("Fallback name");
-                    assertThat(clientMetadata.get("client_name#de-CH")).isEqualTo("German name (region Switzerland)");
-                    assertThat(clientMetadata.get("logo_uri")).isEqualTo("www.example.com/logo.png");
+                    assertEquals("Fallback name", clientMetadata.get("client_name"));
+                    assertEquals("German name (region Switzerland)", clientMetadata.get("client_name#de-CH"));
+                    assertEquals("www.example.com/logo.png", clientMetadata.get("logo_uri"));
 
                     assertThat(result.getResponse().getContentAsString()).doesNotContain("null");
                 });
@@ -203,9 +214,9 @@ class VerificationControllerIT {
     @Test
     @Sql(executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD, scripts = "/insert_sdjwt_mgmt.sql")
     @Sql(executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD, scripts = "/delete_mgmt.sql")
-    void shouldAcceptRefusal() throws Exception {
+    void shouldAcceptRefusalIWithValidErrorType() throws Exception {
         mock.perform(post(String.format("/api/v1/request-object/%s/response-data", requestId))
-                        .formField("error", "I_dont_want_to")
+                        .formField("error", "vp_formats_not_supported")
                         .formField("error_description", "I really just dont want to"))
                 .andExpect(status().isOk());
         var managementEntity = managementEntityRepository.findById(requestId).orElseThrow();
@@ -216,23 +227,23 @@ class VerificationControllerIT {
     @Test
     @Sql(executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD, scripts = "/insert_sdjwt_mgmt.sql")
     @Sql(executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD, scripts = "/delete_mgmt.sql")
-    void shouldRespond404onGetRequestObject() throws Exception {
-        UUID notExistingRequestId = UUID.fromString("00000000-0000-0000-0000-000000000000");
-        mock.perform(get(String.format("/request-object/%s", notExistingRequestId)))
-                .andExpect(status().isNotFound());
+    void shouldFailWhenRefusalWithInvalidErrorTypeIs() throws Exception {
+        mock.perform(post(String.format("/api/v1/request-object/%s/response-data", requestId))
+                        .formField("error", "non_existing_Type")
+                        .formField("error_description", "I really just dont want to"))
+                .andExpect(status().isBadRequest());
+        var managementEntity = managementEntityRepository.findById(requestId).orElseThrow();
+        assertThat(managementEntity.getState()).isEqualTo(VerificationStatus.PENDING);
+
     }
 
     @Test
     @Sql(executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD, scripts = "/insert_sdjwt_mgmt.sql")
     @Sql(executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD, scripts = "/delete_mgmt.sql")
-    void shouldRespond404onPostResponseData() throws Exception {
+    void shouldRespond404onGetRequestObject() throws Exception {
         UUID notExistingRequestId = UUID.fromString("00000000-0000-0000-0000-000000000000");
-
-        mock.perform(post(String.format("/api/v1/request-object/%s/response-data", notExistingRequestId))
-                        .formField("error", "trying_to_get_404")
-                        .formField("error_description", "mimi"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error").value(VerificationErrorDto.AUTHORIZATION_REQUEST_OBJECT_NOT_FOUND.toString()));
+        mock.perform(get(String.format("/request-object/%s", notExistingRequestId)))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -361,8 +372,8 @@ class VerificationControllerIT {
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("error").value("invalid_request"))
-                .andExpect(jsonPath("errorDescription").value("Request contains non-distinct disclosures"));
+                .andExpect(jsonPath("$.error").value("invalid_credential"))
+                .andExpect(jsonPath("$.error_description").value("Request contains non-distinct disclosures"));
 
         var managementEntity = managementEntityRepository.findById(requestId).orElseThrow();
         assertThat(managementEntity.getState()).isEqualTo(VerificationStatus.FAILED);
@@ -395,7 +406,7 @@ class VerificationControllerIT {
         var responseBody = response.getResponse().getContentAsString();
         assertThat(response.getResponse().getContentAsString())
                 .withFailMessage("Should have response body").isNotBlank();
-        assertThat(responseBody).contains(VerificationErrorDto.INVALID_REQUEST.toString());
+        assertThat(responseBody).contains(INVALID_CREDENTIAL.toString());
         assertThat(responseBody).contains("Invalid algorithm");
     }
 
@@ -425,7 +436,7 @@ class VerificationControllerIT {
         var responseBody = response.getResponse().getContentAsString();
         assertThat(response.getResponse().getContentAsString())
                 .withFailMessage("Should have response body").isNotBlank();
-        assertThat(responseBody).contains(VerificationErrorDto.INVALID_REQUEST.toString());
+        assertThat(responseBody).contains(INVALID_CREDENTIAL.toString());
         assertThat(responseBody).contains("holder_binding_mismatch");
     }
 
@@ -449,8 +460,8 @@ class VerificationControllerIT {
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("error").value("invalid_request"))
-                .andExpect(jsonPath("errorDescription").value("Could not verify JWT credential is not yet valid"));
+                .andExpect(jsonPath("error").value("invalid_credential"))
+                .andExpect(jsonPath("error_description").value("Could not verify JWT credential is not yet valid"));
 
         var managementEntity = managementEntityRepository.findById(requestId).orElseThrow();
         assertThat(managementEntity.getState()).isEqualTo(VerificationStatus.FAILED);
@@ -477,8 +488,8 @@ class VerificationControllerIT {
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("error").value("invalid_request"))
-                .andExpect(jsonPath("errorDescription").value("Could not verify JWT credential is expired"));
+                .andExpect(jsonPath("error").value("invalid_credential"))
+                .andExpect(jsonPath("error_description").value("Could not verify JWT credential is expired"));
 
         var managementEntity = managementEntityRepository.findById(requestId).orElseThrow();
         assertThat(managementEntity.getState()).isEqualTo(VerificationStatus.FAILED);
@@ -506,8 +517,8 @@ class VerificationControllerIT {
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("error").value("invalid_request"))
-                .andExpect(jsonPath("errorDescription").value("Could not verify JWT problem with disclosures and _sd field"));
+                .andExpect(jsonPath("error").value("invalid_credential"))
+                .andExpect(jsonPath("error_description").value("Could not verify JWT problem with disclosures and _sd field"));
 
         var managementEntity = managementEntityRepository.findById(requestId).orElseThrow();
         assertThat(managementEntity.getState()).isEqualTo(VerificationStatus.FAILED);
@@ -572,8 +583,8 @@ class VerificationControllerIT {
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("error").value("invalid_request"))
-                .andExpect(jsonPath("errorDescription").value("Failed to verify JWT: Issuer public key does not match signature!"));
+                .andExpect(jsonPath("error").value("invalid_credential"))
+                .andExpect(jsonPath("error_description").value("Failed to verify JWT: Issuer public key does not match signature!"));
     }
 
 
@@ -596,8 +607,8 @@ class VerificationControllerIT {
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("error").value("invalid_request"))
-                .andExpect(jsonPath("errorDescription").value("Signature mismatch"));
+                .andExpect(jsonPath("error").value("invalid_credential"))
+                .andExpect(jsonPath("error_description").value("Signature mismatch"));
     }
 
     @Test
@@ -621,7 +632,7 @@ class VerificationControllerIT {
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("error").value("invalid_request"))
-                .andExpect(jsonPath("errorDescription", containsString("DescriptorDto map cannot be empty")));
+                .andExpect(jsonPath("error_description", containsString("DescriptorDto map cannot be empty")));
     }
 
     @Test
@@ -645,7 +656,7 @@ class VerificationControllerIT {
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("error").value("invalid_request"))
-                .andExpect(jsonPath("errorDescription", containsString("format - must not be blank")));
+                .andExpect(jsonPath("error_description", containsString("format - must not be blank")));
     }
 
     @Test
@@ -674,9 +685,34 @@ class VerificationControllerIT {
                         .formField("presentation_submission", presentationSubmission)
                         .formField("vp_token", vpToken))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("error").value("invalid_request"))
-                .andExpect(jsonPath("errorDescription", containsString("The VC cannot be validated as the remote list does not contain this VC!")))
+                .andExpect(jsonPath("error").value("invalid_credential"))
+                .andExpect(jsonPath("error_description", containsString("The VC cannot be validated as the remote list does not contain this VC!")))
                 .andReturn();
+
+        var managementEntity = managementEntityRepository.findById(requestId).orElseThrow();
+        assertThat(managementEntity.getState()).isEqualTo(VerificationStatus.FAILED);
+    }
+
+
+    @Test
+    @Sql(executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD, scripts = "/insert_sdjwt_mgmt.sql")
+    @Sql(executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD, scripts = "/delete_mgmt.sql")
+    void expiredProof_thenException() throws Exception {
+        // GIVEN
+        SDJWTCredentialMock emulator = new SDJWTCredentialMock();
+        var sdJWT = emulator.createSDJWTMock();
+        var vpToken = emulator.addKeyBindingProof(sdJWT, NONCE_SD_JWT_SQL, "http://localhost", Instant.now().minusSeconds(verificationProperties.getAcceptableProofTimeWindowSeconds()).getEpochSecond());
+        String presentationSubmission = getPresentationSubmissionString(UUID.randomUUID());
+
+        // mock did resolver response so we get a valid public key for the issuer
+        mockDidResolverResponse(emulator);
+
+        // WHEN / THEN
+        mock.perform(post(String.format("/api/v1/request-object/%s/response-data", requestId))
+                        .contentType(APPLICATION_FORM_URLENCODED_VALUE)
+                        .formField("presentation_submission", presentationSubmission)
+                        .formField("vp_token", vpToken))
+                .andExpect(status().isBadRequest());
 
         var managementEntity = managementEntityRepository.findById(requestId).orElseThrow();
         assertThat(managementEntity.getState()).isEqualTo(VerificationStatus.FAILED);

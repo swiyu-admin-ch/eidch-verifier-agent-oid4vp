@@ -6,18 +6,18 @@
 
 package ch.admin.bj.swiyu.verifier.oid4vp.common.config;
 
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-
 @ActiveProfiles("test")
 @SpringBootTest
-public class ClientMetadataTest {
+class ClientMetadataTest {
     @Autowired
     OpenIdClientMetadataConfiguration openIdClientMetadataConfiguration;
 

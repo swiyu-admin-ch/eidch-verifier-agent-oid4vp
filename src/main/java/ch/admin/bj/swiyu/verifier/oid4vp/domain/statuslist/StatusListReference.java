@@ -6,8 +6,8 @@
 
 package ch.admin.bj.swiyu.verifier.oid4vp.domain.statuslist;
 
-import ch.admin.bj.swiyu.verifier.oid4vp.domain.exception.VerificationErrorResponseCode;
-import ch.admin.bj.swiyu.verifier.oid4vp.domain.exception.VerificationException;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationErrorResponseCode;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationException;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.publickey.IssuerPublicKeyLoader;
 import com.nimbusds.jwt.SignedJWT;
 import lombok.AllArgsConstructor;
@@ -54,6 +54,8 @@ public abstract class StatusListReference {
     private final Map<String, Object> statusListReferenceClaims;
 
     private final IssuerPublicKeyLoader issuerPublicKeyLoader;
+
+    private final String referencedTokenIssuer;
 
     /**
      * Verifies the status of the index pointed to by the status list reference

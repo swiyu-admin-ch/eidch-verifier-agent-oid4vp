@@ -6,19 +6,17 @@
 
 package ch.admin.bj.swiyu.verifier.oid4vp.domain.statuslist;
 
-import ch.admin.bj.swiyu.verifier.oid4vp.domain.management.ManagementEntity;
-import ch.admin.bj.swiyu.verifier.oid4vp.domain.publickey.IssuerPublicKeyLoader;
-import kotlin.NotImplementedError;
-import lombok.AllArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
-import java.util.stream.Collectors;
+
+import ch.admin.bj.swiyu.verifier.oid4vp.domain.management.ManagementEntity;
+import ch.admin.bj.swiyu.verifier.oid4vp.domain.publickey.IssuerPublicKeyLoader;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
 
 @Component
 @AllArgsConstructor
@@ -71,33 +69,24 @@ public class StatusListReferenceFactory {
      */
     public List<StatusListReference> createStatusListReferences(Map<String, Object> vcClaims, ManagementEntity presentationManagementEntity) {
         List<StatusListReference> referenceList = new LinkedList<>();
+        var referencedTokenIssuer = Optional
+                .ofNullable(vcClaims.get("iss"))
+                .map(Object::toString)
+                .orElseThrow();
         Optional.ofNullable(vcClaims.get("status"))
                 .map(o -> (Map<String, Object>) o)
-                .map(createTokenStatusListReferences(presentationManagementEntity))
-                .ifPresent(referenceList::addAll);
-        Optional.ofNullable(vcClaims.get("credentialStatus"))
-                .map(createBitStringStatusListsHigherOrder(presentationManagementEntity))
+                .map(createTokenStatusListReferences(referencedTokenIssuer))
                 .ifPresent(referenceList::addAll);
         log.trace("Built {} StatusListReferences for fetching status lists for id {}", referenceList.size(), presentationManagementEntity.getId());
         return referenceList;
     }
 
 
-    private Function<Map<String, Object>, List<TokenStatusListReference>> createTokenStatusListReferences(ManagementEntity presentationManagementEntity) {
+    private Function<Map<String, Object>, List<TokenStatusListReference>> createTokenStatusListReferences(String referencedTokenIssuer) {
         return tokenStatusListReferenceTokenEntry -> List.of(
                 new TokenStatusListReference(statusListResolverAdapter, (Map<String, Object>) tokenStatusListReferenceTokenEntry.get("status_list"),
-                        issuerPublicKeyLoader));
+                        issuerPublicKeyLoader, referencedTokenIssuer)
+        );
     }
 
-    private Function<Object, List<StatusListReference>> createBitStringStatusListsHigherOrder(ManagementEntity presentationManagementEntity) {
-        return bitStringEntries -> createBitStringStatusLists(bitStringEntries, presentationManagementEntity);
-    }
-
-    private List<StatusListReference> createBitStringStatusLists(Object w3cCredentialStatus, ManagementEntity presentationManagementEntity) {
-        if (w3cCredentialStatus instanceof List) {
-            return ((List<?>) w3cCredentialStatus).stream().map(createBitStringStatusListsHigherOrder(presentationManagementEntity)).flatMap(List::stream).collect(Collectors.toList());
-        }
-        // The implementation in similar fashion to the token status list would go here for bit string status list, should the need arise (again) to use these
-        throw new NotImplementedError();
-    }
 }

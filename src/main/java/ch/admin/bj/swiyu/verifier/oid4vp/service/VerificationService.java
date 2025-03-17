@@ -6,10 +6,22 @@
 
 package ch.admin.bj.swiyu.verifier.oid4vp.service;
 
+import java.util.Set;
+import java.util.UUID;
+
+import static ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationError.INVALID_REQUEST;
+import static ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationErrorResponseCode.*;
+import static ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationException.submissionError;
+import static ch.admin.bj.swiyu.verifier.oid4vp.service.VerifiableCredentialExtractor.extractVerifiableCredential;
+import static java.util.Objects.isNull;
+import static org.apache.commons.lang3.StringUtils.isBlank;
+
 import ch.admin.bj.swiyu.verifier.oid4vp.api.VerificationPresentationRequestDto;
 import ch.admin.bj.swiyu.verifier.oid4vp.api.submission.PresentationSubmissionDto;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.config.VerificationProperties;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationErrorResponseCode;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.SdjwtCredentialVerifier;
-import ch.admin.bj.swiyu.verifier.oid4vp.domain.exception.VerificationException;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationException;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.management.ManagementEntity;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.management.ManagementEntityRepository;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.publickey.IssuerPublicKeyLoader;
@@ -26,20 +38,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Set;
-import java.util.UUID;
-
-import static ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationError.*;
-import static ch.admin.bj.swiyu.verifier.oid4vp.domain.exception.VerificationException.submissionError;
-import static ch.admin.bj.swiyu.verifier.oid4vp.service.VerifiableCredentialExtractor.extractVerifiableCredential;
-import static java.util.Objects.isNull;
-import static org.apache.commons.lang3.StringUtils.isBlank;
-
 @Slf4j
 @Service
 @AllArgsConstructor
 public class VerificationService {
 
+    private final VerificationProperties verificationProperties;
     private final ManagementEntityRepository managementEntityRepository;
     private final IssuerPublicKeyLoader issuerPublicKeyLoader;
     private final StatusListReferenceFactory statusListReferenceFactory;
@@ -76,6 +80,47 @@ public class VerificationService {
             markVerificationAsFailed(managementEntityId, e);
             log.trace("Saved failed verification result for {}", managementEntityId);
             throw e; // rethrow since client get notified of the error
+        }
+    }
+
+    private static void verifyProcessNotClosed(ManagementEntity entity) {
+        if (entity.isExpired() || !entity.isVerificationPending()) {
+            throw submissionError(VERIFICATION_PROCESS_CLOSED);
+        }
+    }
+
+    private static PresentationSubmissionDto parseAndValidatePresentationSubmission(String presentationSubmissionJson) {
+        if (isBlank(presentationSubmissionJson)) {
+            return null;
+        }
+
+        var objectMapper = new ObjectMapper();
+        objectMapper.configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
+
+        try {
+            var presentationSubmission = objectMapper.readValue(presentationSubmissionJson, PresentationSubmissionDto.class);
+            validatePresentationSubmission(presentationSubmission);
+            return presentationSubmission;
+        } catch (JsonProcessingException | IllegalArgumentException e) {
+            throw submissionError(VerificationErrorResponseCode.INVALID_PRESENTATION_SUBMISSION,e.getMessage());
+        }
+
+    }
+
+    private static void validatePresentationSubmission(PresentationSubmissionDto presentationSubmission) {
+        try (ValidatorFactory factory = Validation.buildDefaultValidatorFactory()) {
+            Validator validator = factory.getValidator();
+            Set<ConstraintViolation<PresentationSubmissionDto>> violations = validator.validate(presentationSubmission);
+
+            if (violations.isEmpty()) {
+                return;
+            }
+
+            StringBuilder builder = new StringBuilder();
+            for (ConstraintViolation<PresentationSubmissionDto> violation : violations) {
+                builder.append("%s%s - %s".formatted(builder.isEmpty() ? "" : ", ", violation.getPropertyPath(), violation.getMessage()));
+            }
+            throw new IllegalArgumentException("Invalid presentation submission: " + builder);
         }
     }
 
@@ -128,56 +173,16 @@ public class VerificationService {
                         managementEntity,
                         issuerPublicKeyLoader,
                         statusListReferenceFactory,
-                        objectMapper);
+                        objectMapper,
+                        verificationProperties);
                 return verifier.verifyPresentation();
             }
             default -> throw new IllegalArgumentException("Unknown format: " + format);
         }
     }
 
-    private static void verifyProcessNotClosed(ManagementEntity entity) {
-        if (entity.isExpired() || !entity.isVerificationPending()) {
-            throw submissionError(VERIFICATION_PROCESS_CLOSED);
-        }
-    }
-
     private ManagementEntity getManagementEntity(UUID managementEntityId) {
         return managementEntityRepository.findById(managementEntityId)
                 .orElseThrow(() -> submissionError(AUTHORIZATION_REQUEST_OBJECT_NOT_FOUND));
-    }
-
-    private static PresentationSubmissionDto parseAndValidatePresentationSubmission(String presentationSubmissionJson) {
-        if (isBlank(presentationSubmissionJson)) {
-            return null;
-        }
-
-        var objectMapper = new ObjectMapper();
-        objectMapper.configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
-
-        try {
-            var presentationSubmission = objectMapper.readValue(presentationSubmissionJson, PresentationSubmissionDto.class);
-            validatePresentationSubmission(presentationSubmission);
-            return presentationSubmission;
-        } catch (JsonProcessingException | IllegalArgumentException e) {
-            throw submissionError(INVALID_REQUEST, e.getMessage());
-        }
-
-    }
-
-    private static void validatePresentationSubmission(PresentationSubmissionDto presentationSubmission) {
-        try (ValidatorFactory factory = Validation.buildDefaultValidatorFactory()) {
-            Validator validator = factory.getValidator();
-            Set<ConstraintViolation<PresentationSubmissionDto>> violations = validator.validate(presentationSubmission);
-
-            if (violations.isEmpty()) {
-                return;
-            }
-
-            StringBuilder builder = new StringBuilder();
-            for (ConstraintViolation<PresentationSubmissionDto> violation : violations) {
-                builder.append("%s%s - %s".formatted(builder.isEmpty() ? "" : ", ", violation.getPropertyPath(), violation.getMessage()));
-            }
-            throw new IllegalArgumentException("Invalid presentation submission: " + builder);
-        }
     }
 }

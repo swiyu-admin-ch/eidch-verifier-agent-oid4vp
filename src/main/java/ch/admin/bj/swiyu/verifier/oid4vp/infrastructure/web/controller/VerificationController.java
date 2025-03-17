@@ -10,9 +10,10 @@ import ch.admin.bj.swiyu.verifier.oid4vp.api.VerificationErrorResponseDto;
 import ch.admin.bj.swiyu.verifier.oid4vp.api.VerificationPresentationRequestDto;
 import ch.admin.bj.swiyu.verifier.oid4vp.api.requestobject.RequestObjectDto;
 import ch.admin.bj.swiyu.verifier.oid4vp.common.config.OpenIdClientMetadataConfiguration;
-import ch.admin.bj.swiyu.verifier.oid4vp.domain.exception.VerificationException;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationException;
 import ch.admin.bj.swiyu.verifier.oid4vp.service.RequestObjectService;
 import ch.admin.bj.swiyu.verifier.oid4vp.service.VerificationService;
+import io.micrometer.core.annotation.Timed;
 import io.swagger.v3.oas.annotations.ExternalDocumentation;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -50,6 +51,7 @@ public class VerificationController {
     private final VerificationService verificationService;
     private final OpenIdClientMetadataConfiguration openIdClientMetadataConfiguration;
 
+    @Timed
     @GetMapping(value = {"openid-client-metadata.json"})
     @Operation(
             summary = "Get client metadata",
@@ -80,6 +82,7 @@ public class VerificationController {
         return openIdClientMetadataConfiguration.getOpenIdClientMetadata();
     }
 
+    @Timed
     @GetMapping(value= {"request-object/{request_id}"})
     @Operation(
             summary = "Get Request Object",
@@ -103,6 +106,7 @@ public class VerificationController {
         return requestObjectService.assembleRequestObject(requestId);
     }
 
+    @Timed
     @PostMapping(value = {"request-object/{request_id}/response-data"},
             consumes = {MediaType.APPLICATION_FORM_URLENCODED_VALUE},
             produces = {MediaType.APPLICATION_JSON_VALUE})
@@ -110,7 +114,7 @@ public class VerificationController {
             summary = "Receive Verification Presentation (from e.g. Wallet)",
             externalDocs = @ExternalDocumentation(
                     description = "OpenId4VP response parameters",
-                    url = "https://openid.net/specs/openid-4-verifiable-presentations-1_0-20.html#section-6.1"
+                    url = "https://openid.net/specs/openid-4-verifiable-presentations-1_0-ID2.html#section-6.1"
             ),
             responses = {
                     @ApiResponse(
@@ -135,9 +139,9 @@ public class VerificationController {
     @ExceptionHandler(VerificationException.class)
     ResponseEntity<VerificationErrorResponseDto> handleVerificationException(VerificationException e) {
         var error = toVerficationErrorResponseDto(e);
-        log.warn(String.format("The received verification presentation could not be verified - caused by %s - %s", error.error(), error.errorCode()), e);
+        log.warn("The received verification presentation could not be verified - caused by {}-{}:{}", error.error(), error.errorCode(), error.errorDescription(), e);
         HttpStatus httpStatus;
-        switch (e.getErrorType()) {
+        switch (e.getErrorResponseCode()) {
             case VERIFICATION_PROCESS_CLOSED -> httpStatus = HttpStatus.GONE;
             case AUTHORIZATION_REQUEST_OBJECT_NOT_FOUND -> httpStatus = HttpStatus.NOT_FOUND;
             default -> httpStatus = HttpStatus.BAD_REQUEST;

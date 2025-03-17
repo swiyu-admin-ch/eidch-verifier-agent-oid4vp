@@ -6,8 +6,24 @@
 
 package ch.admin.bj.swiyu.verifier.oid4vp.domain;
 
+import java.io.IOException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.PublicKey;
+import java.text.ParseException;
+import java.time.Instant;
+import java.util.*;
+import java.util.stream.Collectors;
+
+import static ch.admin.bj.swiyu.verifier.oid4vp.domain.CredentialVerifierSupport.checkCommonPresentationDefinitionCriteria;
+import static ch.admin.bj.swiyu.verifier.oid4vp.domain.CredentialVerifierSupport.getRequestedFormat;
+import static ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationErrorResponseCode.*;
+import static ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationException.credentialError;
+import static org.springframework.util.StringUtils.hasText;
+
 import ch.admin.bj.swiyu.verifier.oid4vp.common.base64.Base64Utils;
-import ch.admin.bj.swiyu.verifier.oid4vp.domain.exception.VerificationException;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.config.VerificationProperties;
+import ch.admin.bj.swiyu.verifier.oid4vp.common.exception.VerificationException;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.management.ManagementEntity;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.publickey.IssuerPublicKeyLoader;
 import ch.admin.bj.swiyu.verifier.oid4vp.domain.publickey.LoadingPublicKeyOfIssuerFailedException;
@@ -20,30 +36,19 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jayway.jsonpath.PathNotFoundException;
 import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.crypto.ECDSAVerifier;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
+import com.nimbusds.jwt.proc.BadJWTException;
+import com.nimbusds.jwt.proc.DefaultJWTClaimsVerifier;
 import io.jsonwebtoken.*;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.util.CollectionUtils;
-
-import java.io.IOException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.PublicKey;
-import java.text.ParseException;
-import java.util.*;
-import java.util.stream.Collectors;
-
-import static ch.admin.bj.swiyu.verifier.oid4vp.domain.CredentialVerifierSupport.checkCommonPresentationDefinitionCriteria;
-import static ch.admin.bj.swiyu.verifier.oid4vp.domain.CredentialVerifierSupport.getRequestedFormat;
-import static ch.admin.bj.swiyu.verifier.oid4vp.domain.exception.VerificationErrorResponseCode.*;
-import static ch.admin.bj.swiyu.verifier.oid4vp.domain.exception.VerificationException.credentialError;
-import static org.springframework.util.StringUtils.hasText;
 
 /**
  * Verifies the presentation of a SD-JWT Credential.
@@ -60,6 +65,7 @@ public class SdjwtCredentialVerifier {
     private final IssuerPublicKeyLoader issuerPublicKeyLoader;
     private final StatusListReferenceFactory statusListReferenceFactory;
     private final ObjectMapper objectMapper;
+    private final VerificationProperties verificationProperties;
 
 
     /**
@@ -80,6 +86,9 @@ public class SdjwtCredentialVerifier {
      * "https://www.ietf.org/archive/id/draft-ietf-oauth-selective-disclosure-jwt-10.html#section-8.3">
      * 8.3 Verification by the Verifier
      * </a>
+     * </li>
+     * <li>
+     *     <a href=https://www.ietf.org/archive/id/draft-ietf-oauth-sd-jwt-vc-08.html#section-3.2.2.2>SD-JWT VC 3.2</a>
      * </li>
      * </ul>
      * .
@@ -127,11 +136,11 @@ public class SdjwtCredentialVerifier {
                     .build()
                     .parseSignedClaims(issuerSignedJWTToken);
         } catch (PrematureJwtException e) {
-            throw credentialError(e, CREDENTIAL_INVALID, "Could not verify JWT credential is not yet valid");
+            throw credentialError(e, MALFORMED_CREDENTIAL, "Could not verify JWT credential is not yet valid");
         } catch (ExpiredJwtException e) {
-            throw credentialError(e, CREDENTIAL_INVALID, "Could not verify JWT credential is expired");
+            throw credentialError(e,MALFORMED_CREDENTIAL, "Could not verify JWT credential is expired");
         } catch (JwtException e) {
-            throw credentialError(e, CREDENTIAL_INVALID, "Signature mismatch");
+            throw credentialError(e, MALFORMED_CREDENTIAL,"Signature mismatch");
         }
 
         log.trace("Successfully verified signature of id {}", managementEntity.getId());
@@ -170,34 +179,39 @@ public class SdjwtCredentialVerifier {
 
         // 8.1 / 3.2.2 If the claim name is _sd or ..., the SD-JWT MUST be rejected.
         if (CollectionUtils.containsAny(disclosedClaimNames, Set.of("_sd", "..."))) {
-            throw credentialError(CREDENTIAL_INVALID, "Illegal disclosure found with name _sd or ...");
+            throw credentialError( MALFORMED_CREDENTIAL,"Illegal disclosure found with name _sd or ...");
+        }
+
+        // SD-JWT VC 3.2.2
+        if (CollectionUtils.containsAny(disclosedClaimNames, Set.of("iss", "nbf", "exp", "cnf", "vct", "status"))) {
+            throw credentialError( MALFORMED_CREDENTIAL,"If present, the following registered JWT claims MUST be included in the SD-JWT and MUST NOT be included in the Disclosures: 'iss', 'nbf', 'exp', 'cnf', 'vct', 'status'");
         }
 
         // 8.1 / 3.3.3: If the claim name already exists at the level of the _sd key, the SD-JWT MUST be rejected.
         if (CollectionUtils.containsAny(disclosedClaimNames, claims.getPayload().keySet())) { // If there is any result of the set intersection
-            throw credentialError(CREDENTIAL_INVALID, "Can not resolve disclosures. Existing Claim would be overridden.");
+            throw credentialError( MALFORMED_CREDENTIAL,"Can not resolve disclosures. Existing Claim would be overridden.");
         }
 
 
         // check if distinct disclosures
         if (new HashSet<>(disclosures).size() != disclosures.size()) {
-            throw credentialError(CREDENTIAL_INVALID,
+            throw credentialError(MALFORMED_CREDENTIAL,
                     "Request contains non-distinct disclosures");
         }
         if (!digestsFromDisclosures.stream()
                 .allMatch(dig -> Collections.frequency(payload.get("_sd", List.class), dig) == 1)) {
-            throw credentialError(CREDENTIAL_INVALID,
+            throw credentialError(MALFORMED_CREDENTIAL,
                     "Could not verify JWT problem with disclosures and _sd field");
         }
         log.trace("Successfully verified disclosure digests of id {}", managementEntity.getId());
 
-        // Check VC Status
-        verifyStatus(payload);
-        // The VC is valid, we can now begin to check the data submission
-
         // Confirm that the returned Credential(s) meet all criteria sent in the
         // Presentation Definition in the Authorization Request.
         var sdjwt = checkPresentationDefinitionCriteria(payload, disclosures);
+
+        // The data submission is valid, we can now begin to check the status of the VC
+        verifyStatus(payload);
+
         log.trace("Successfully verified the presented VC for id {}", managementEntity.getId());
         return sdjwt;
     }
@@ -208,7 +222,6 @@ public class SdjwtCredentialVerifier {
             throws VerificationException {
         Map<String, Object> expectedMap = new HashMap<>(claims);
         SDObjectDecoder decoder = new SDObjectDecoder();
-        ObjectMapper objectMapper = new ObjectMapper();
         String sdJWTString;
 
         try {
@@ -216,9 +229,9 @@ public class SdjwtCredentialVerifier {
             log.trace("Decoded SD-JWT to clear data for id {}", managementEntity.getId());
             sdJWTString = objectMapper.writeValueAsString(decodedSDJWT);
         } catch (PathNotFoundException e) {
-            throw credentialError(e, CREDENTIAL_INVALID, e.getMessage());
+            throw credentialError(e, e.getMessage());
         } catch (JsonProcessingException e) {
-            throw credentialError(e, CREDENTIAL_INVALID, "An error occurred while parsing SDJWT");
+            throw credentialError(e, "An error occurred while parsing SDJWT");
         }
         log.trace("Checking presentation data with definition criteria for id {}", managementEntity.getId());
         checkCommonPresentationDefinitionCriteria(sdJWTString, managementEntity);
@@ -271,28 +284,53 @@ public class SdjwtCredentialVerifier {
         try {
             SignedJWT keyBindingJWT = SignedJWT.parse(keyBindingProof);
 
-            if (!"kb+jwt".equals(keyBindingJWT.getHeader().getType().toString())) {
-                throw credentialError(HOLDER_BINDING_MISMATCH,
-                        String.format("Type of holder binding typ is expected to be kb+jwt but was %s",
-                                keyBindingJWT.getHeader().getType().toString()));
-            }
-
-            // Check if kb algorithm matches the required format
-            var requestedKeyBindingAlg = getRequestedFormat(CREDENTIAL_FORMAT, managementEntity).keyBindingAlg();
-            if (!requestedKeyBindingAlg.contains(keyBindingJWT.getHeader().getAlgorithm().getName())) {
-                throw credentialError(HOLDER_BINDING_MISMATCH, "Holder binding algorithm must be in %s".formatted(requestedKeyBindingAlg));
-            }
+            validateKeyBindingHeader(keyBindingJWT.getHeader());
 
             if (!keyBindingJWT.verify(new ECDSAVerifier(keyBinding.toECKey()))) {
                 throw credentialError(HOLDER_BINDING_MISMATCH, "Holder Binding provided does not match the one in the credential");
             }
+            validateKeyBindingClaims(keyBindingJWT);
             keyBindingClaims = keyBindingJWT.getJWTClaimsSet();
         } catch (ParseException e) {
             throw credentialError(e, HOLDER_BINDING_MISMATCH, "Holder Binding could not be parsed");
         } catch (JOSEException e) {
             throw credentialError(e, HOLDER_BINDING_MISMATCH, "Failed to verify the holder key binding - only supporting EC Keys");
+        } catch (BadJWTException e) {
+            throw credentialError(e, HOLDER_BINDING_MISMATCH, "Holder Binding is not a valid JWT");
         }
         return keyBindingClaims;
+    }
+
+    /**
+     * Check they type and format of the key binding jwt
+     */
+    private void validateKeyBindingHeader(JWSHeader keyBindingHeader) {
+        if (!"kb+jwt".equals(keyBindingHeader.getType().toString())) {
+            throw credentialError(HOLDER_BINDING_MISMATCH,
+                    String.format("Type of holder binding typ is expected to be kb+jwt but was %s",
+                            keyBindingHeader.getType().toString()));
+        }
+
+        // Check if kb algorithm matches the required format
+        var requestedKeyBindingAlg = getRequestedFormat(CREDENTIAL_FORMAT, managementEntity).keyBindingAlg();
+        if (!requestedKeyBindingAlg.contains(keyBindingHeader.getAlgorithm().getName())) {
+            throw credentialError(HOLDER_BINDING_MISMATCH, "Holder binding algorithm must be in %s".formatted(requestedKeyBindingAlg));
+        }
+    }
+
+    /**
+     * Check if the jwt has been issued in an acceptable time window
+     */
+    private void validateKeyBindingClaims(SignedJWT keyBindingJWT) throws BadJWTException, ParseException {
+        // See https://connect2id.com/products/nimbus-jose-jwt/examples/validating-jwt-access-tokens#framework
+        new DefaultJWTClaimsVerifier<>(null, Set.of("iat")).verify(keyBindingJWT.getJWTClaimsSet(), null);
+        var proofIssueTime = keyBindingJWT.getJWTClaimsSet().getIssueTime().toInstant();
+        var now = Instant.now();
+        // iat not within acceptable proof time window
+        if (proofIssueTime.isBefore(now.minusSeconds(verificationProperties.getAcceptableProofTimeWindowSeconds()))
+                || proofIssueTime.isAfter(now.plusSeconds(verificationProperties.getAcceptableProofTimeWindowSeconds()))) {
+            throw credentialError(HOLDER_BINDING_MISMATCH, String.format("Holder Binding proof was not issued at an acceptable time. Expected %d +/- %d seconds", now.getEpochSecond(), verificationProperties.getAcceptableProofTimeWindowSeconds()));
+        }
     }
 
     @NotNull

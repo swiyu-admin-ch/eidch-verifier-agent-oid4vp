@@ -11,17 +11,24 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 
 /**
- * RFC 6749 Error codes as metioned in <a href="https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-7.5">
- * OpenID for Verifiable Presentations</a>.
+ * RFC 6749 Error codes as mentioned in <a href="https://openid.net/specs/openid-4-verifiable-presentations-1_0-ID2.html#section-6.4">OpenID4VP</a>
+ * OpenID for Verifiable Presentations</a> which are supported by this implementation.
  */
 @AllArgsConstructor
-@Schema(name = "VerificationError", enumAsRef = true)
+@Schema(name = "VerificationError", enumAsRef = true, description = """
+        | Value                                                   | Description                                                                                  |
+        |---------------------------------------------------------|----------------------------------------------------------------------------------------------|
+        | invalid_request                                         | The request was invalid.<br>This is a general purpose code if none of the other codes apply. |
+        | server_error                                            | The authorization server encountered an unexpected                                           |
+        | invalid_credential                                      | The credential presented during validation was deemed invalid.                               |
+        """)
 public enum VerificationErrorDto {
-    AUTHORIZATION_REQUEST_OBJECT_NOT_FOUND("authorization_request_object_not_found"),
-    AUTHORIZATION_REQUEST_MISSING_ERROR_PARAM("authorization_request_missing_error_param"),
-    VERIFICATION_PROCESS_CLOSED("verification_process_closed"),
-    INVALID_PRESENTATION_DEFINITION("invalid_presentation_definition"),
-    INVALID_REQUEST("invalid_request");
+    // RFC codes
+    INVALID_REQUEST("invalid_request"),
+    SERVER_ERROR("server_error"),
+
+    // Codes according to custom profile
+    INVALID_CREDENTIAL("invalid_credential");
 
     private final String displayName;
 
