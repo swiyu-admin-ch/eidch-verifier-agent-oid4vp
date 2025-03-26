@@ -27,6 +27,7 @@ scale every service independently of the management service.
 - [Deployment](#deployment)
 - [Usage](#usage)
 - [Development](#development)
+- [Known Issues](#known-issues)
 - [Contributions and feedback](#contributions-and-feedback)
 - [License](#license)
 
@@ -167,6 +168,10 @@ Note that for creating the keys it is expected that the public key is provided a
 | HSM_KEY_PIN                   | Optional pin to unlock the key                                                                                                                                                             |
 | HSM_CONFIG_PATH               | File Path to the HSM config file when using [Sun PKCS11 provider](https://docs.oracle.com/en/java/javase/22/security/pkcs11-reference-guide1.html)                                         |
 | HSM_USER_PIN                  | PIN for getting keys from the HSM                                                                                                                                                          |
+
+## Known Issues
+
+The swiyu Public Beta Trust Infrastructure was deliberately released at an early stage to enable future ecosystem participants. There may still be minor bugs or security vulnerabilities in the test system. We will publish them in the near future as ‘KnownIssues’ in this repository.
 
 ## Contributions and feedback
 
